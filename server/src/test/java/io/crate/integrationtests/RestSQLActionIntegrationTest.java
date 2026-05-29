@@ -411,7 +411,7 @@ public class RestSQLActionIntegrationTest extends SQLHttpIntegrationTest {
         assertThat(response.statusCode()).isEqualTo(400);
         assertThat(response.body()).contains(
             """
-            "SQLParseException[Cannot convert VALUES element in row 2 of type `object_array` to `text_array` for `data`]"
+            "SQLParseException[Cannot convert VALUES element in row 1 of type `object_array` to `text_array` for `data`]"
             """.stripIndent().stripTrailing()
         );
 
@@ -419,7 +419,7 @@ public class RestSQLActionIntegrationTest extends SQLHttpIntegrationTest {
         body =
             """
             {
-                "stmt": "insert into doc.t01 (id, data) values (?, ?), (?, ?)",
+                "stmt": "insert into doc.t01 (id, data) values (?, ?)",
                 "args": ["a", [{"foo": "bar"}]]
             }
             """;
@@ -427,7 +427,7 @@ public class RestSQLActionIntegrationTest extends SQLHttpIntegrationTest {
         assertThat(response.statusCode()).isEqualTo(400);
         assertThat(response.body()).contains(
             """
-            "SQLParseException[Cannot convert VALUES element in row 2 of type `object_array` to `text_array` for `data`]"
+            "SQLParseException[Cannot convert VALUES element in row 1 of type `object_array` to `text_array` for `data`]"
             """.stripIndent().stripTrailing()
         );
 
