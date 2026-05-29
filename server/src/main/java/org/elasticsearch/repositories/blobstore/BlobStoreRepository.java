@@ -907,8 +907,6 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                     staleIndicesToDelete.put(indexEntry);
                 }
             }
-            final ActionListener<Long> groupedListener = new MultiActionListener<>(
-                staleIndicesToDelete.size(), Collectors.summingLong(Long::longValue), listener);
 
             // Start as many workers as fit into the snapshot pool at once at the most
             final Executor executor = threadPool.executor(ThreadPool.Names.SNAPSHOT);
@@ -916,9 +914,28 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
                 ? ((ThreadPoolExecutor) executor).getMaximumPoolSize()
                 : 1;
             final int workers = Math.min(maximumPoolSize, staleIndicesToDelete.size());
+            List<CompletableFuture<Long>> workerFutures = new ArrayList<>(workers);
             for (int i = 0; i < workers; ++i) {
-                executeOneStaleIndexDelete(staleIndicesToDelete, groupedListener);
+                CompletableFuture<Long> workerFuture = new CompletableFuture<>();
+                workerFutures.add(workerFuture);
+                executeOneStaleIndexDelete(staleIndicesToDelete, workerFuture);
             }
+            CompletableFuture.allOf(workerFutures.toArray(new CompletableFuture[0]))
+                .whenComplete((v, err) -> {
+                    assert err == null : "We never complete exceptionally, instead complete with 0.";
+                    long deleted = workerFutures.stream().mapToLong(CompletableFuture::join).sum();
+                    // Finish DROP SNAPSHOT even if we retry cleaning up remaining indices
+                    // Clean up is a best effort and doesn't affect cluster state, only communicates with storage API
+                    listener.onResponse(deleted);
+
+                    if (staleIndicesToDelete.isEmpty() == false) {
+                        if (LOGGER.isDebugEnabled()) {
+                            LOGGER.debug("[{}] Scheduling sequential fallback cleanup for [{}] remaining stale indices",
+                                metadata.name(), staleIndicesToDelete.size());
+                        }
+                        executor.execute(() -> cleanupStaleIndicesSequentially(staleIndicesToDelete));
+                    }
+                });
         } catch (Exception e) {
             // TODO: We shouldn't be blanket catching and suppressing all exceptions here and instead handle them safely upstream.
             //       Currently this catch exists as a stop gap solution to tackle unexpected runtime exceptions from implementations
@@ -928,28 +945,80 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
         }
     }
 
+    /**
+     * Pre 6.0 cleanup.
+     * Best effort to delete remaining stale indices.
+     * It's fine if this operation fails, cleanup will-be re-done on the next DROP SNAPSHOT.
+     * It's mainly done to avoid repeated failed cleanup, if failure was specifically related to concurrency/rate limit.
+     * <br>
+     * SNAPSHOT pool will still have other threads to serve other operations.
+     */
+    private void cleanupStaleIndicesSequentially(BlockingQueue<Map.Entry<String, BlobContainer>> staleIndicesToDelete) {
+        try {
+            while (staleIndicesToDelete.isEmpty() == false) {
+                Map.Entry<String, BlobContainer> indexEntry = staleIndicesToDelete.poll(0L, TimeUnit.MILLISECONDS);
+                if (indexEntry != null) {
+                    indexEntry.getValue().delete();
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.warn(new ParameterizedMessage("[{}] Exception during sequential cleanup of stale indices", metadata.name()), e);
+        }
+    }
+
+
+    /**
+     * Tries to delete a single index and schedules next delete only in case of successful deletion of the current index.
+     * This is done to avoid putting too many delete tasks to the queue
+     * and allow other tasks to use SNAPSHOT pool without too much of a delay.
+     * <br>
+     * Failed entries are re-added to the queue, because we retry cleanup of remaining indices
+     * when we get an error on storage side.
+     */
     private void executeOneStaleIndexDelete(BlockingQueue<Map.Entry<String, BlobContainer>> staleIndicesToDelete,
-                                            ActionListener<Long> listener) throws InterruptedException {
-        Map.Entry<String, BlobContainer> indexEntry = staleIndicesToDelete.poll(0L, TimeUnit.MILLISECONDS);
+                                            CompletableFuture<Long> deleteFuture) {
+        if (staleIndicesToDelete.isEmpty()) {
+            deleteFuture.complete(0L);
+        }
+        Map.Entry<String, BlobContainer> indexEntry = null;
+        try {
+            indexEntry = staleIndicesToDelete.poll(0L, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            deleteFuture.complete(0L);
+        }
         if (indexEntry != null) {
             final String indexSnId = indexEntry.getKey();
-            threadPool.executor(ThreadPool.Names.SNAPSHOT).execute(ActionRunnable.supply(listener, () -> {
+            Map.Entry<String, BlobContainer> finalIndexEntry = indexEntry;
+            threadPool.executor(ThreadPool.Names.SNAPSHOT).execute(() -> {
                 try {
-                    indexEntry.getValue().delete();
-                    LOGGER.debug("[{}] Cleaned up stale index [{}]", metadata.name(), indexSnId);
-                    executeOneStaleIndexDelete(staleIndicesToDelete, listener);
-                    return 1L;
+                    finalIndexEntry.getValue().delete();
+                    if (LOGGER.isDebugEnabled()) {
+                        LOGGER.debug("[{}] Cleaned up stale index [{}]", metadata.name(), indexSnId);
+                    }
+                    CompletableFuture<Long> nextDelete = new CompletableFuture<>();
+                    executeOneStaleIndexDelete(staleIndicesToDelete, nextDelete);
+                    nextDelete.whenComplete((res, err) -> {
+                        if (err != null) {
+                            deleteFuture.complete(0L);
+                        } else {
+                            deleteFuture.complete(res + 1);
+                        }
+                    });
                 } catch (IOException e) {
                     LOGGER.warn(() -> new ParameterizedMessage(
                         "[{}] index {} is no longer part of any snapshots in the repository, " +
                             "but failed to clean up their index folders", metadata.name(), indexSnId), e);
-                    return 0L;
+                    staleIndicesToDelete.add(finalIndexEntry);
+                    deleteFuture.complete(0L);
                 } catch (Exception e) {
                     assert false : e;
                     LOGGER.warn(new ParameterizedMessage("[{}] Exception during single stale index delete", metadata.name()), e);
-                    return 0L;
+                    staleIndicesToDelete.add(finalIndexEntry);
+                    deleteFuture.complete(0L);
                 }
-            }));
+            });
+        } else {
+            deleteFuture.complete(0L);
         }
     }
 
