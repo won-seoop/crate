@@ -24,11 +24,11 @@ package io.crate.analyze.relations;
 import static io.crate.testing.Asserts.assertThat;
 import static io.crate.testing.Asserts.isFunction;
 import static io.crate.testing.Asserts.isLiteral;
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.junit.Before;
@@ -97,6 +97,19 @@ public class RelationAnalyzerTest extends CrateDummyClusterServiceUnitTest {
         AnalyzedRelation relation = executor.analyze("VALUES ([1, 2], 'a')");
         assertThat(relation).isExactlyInstanceOf(TableFunctionRelation.class);
         assertThat(relation.relationName()).hasToString(ValuesFunction.NAME);
+    }
+
+    @Test
+    public void test_insert_values_with_incompatible_types() throws Exception {
+        var executor = SQLExecutor.of(clusterService)
+            .addTable("create table t01 (id text, data array(string));");
+
+        executor.execute("insert into t01 (id, data) values (?, ?), (?, ?)", new Object[][] {
+            new Object[] { "a", new Object[] {Map.of("foo", "bar")}},
+            new Object[] { "a", new Object[] {Map.of("foo", "bar")}}
+        });
+
+        System.out.println();
     }
 
     @Test

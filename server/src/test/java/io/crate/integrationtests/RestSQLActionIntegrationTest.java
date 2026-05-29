@@ -395,4 +395,42 @@ public class RestSQLActionIntegrationTest extends SQLHttpIntegrationTest {
             """.stripIndent().stripTrailing()
         );
     }
+
+    @Test
+    public void test_insert_array_with_incompatible_types() throws Exception {
+        execute("create table doc.t01 (id text, data array(string));");
+
+        String body =
+            """
+            {
+                "stmt": "insert into doc.t01 (id, data) values (?, ?), (?, ?)",
+                "args": ["a", [{"foo": "bar"}], "b", [{"foo": "bar"}]]
+            }
+            """;
+        var response = post(body);
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(response.body()).contains(
+            """
+            "SQLParseException[Cannot convert VALUES element in row 2 of type `object_array` to `text_array` for `data`]"
+            """.stripIndent().stripTrailing()
+        );
+
+
+        body =
+            """
+            {
+                "stmt": "insert into doc.t01 (id, data) values (?, ?), (?, ?)",
+                "args": ["a", [{"foo": "bar"}]]
+            }
+            """;
+        response = post(body);
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(response.body()).contains(
+            """
+            "SQLParseException[Cannot convert VALUES element in row 2 of type `object_array` to `text_array` for `data`]"
+            """.stripIndent().stripTrailing()
+        );
+
+
+    }
 }
