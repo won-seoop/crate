@@ -23,6 +23,7 @@ package io.crate.planner.operators;
 
 import static io.crate.execution.engine.pipeline.LimitAndOffset.NO_LIMIT;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
@@ -32,6 +33,7 @@ import io.crate.analyze.OrderBy;
 import io.crate.common.collections.Lists;
 import io.crate.data.Row;
 import io.crate.execution.dsl.projection.builder.ProjectionBuilder;
+import io.crate.expression.symbol.Symbol;
 import io.crate.planner.DependencyCarrier;
 import io.crate.planner.ExecutionPlan;
 import io.crate.planner.Merge;
@@ -74,6 +76,18 @@ public class RootRelationBoundary extends ForwardingLogicalPlan {
     @Override
     public LogicalPlan replaceSources(List<LogicalPlan> sources) {
         return new RootRelationBoundary(Lists.getOnlyElement(sources));
+    }
+
+    @Override
+    public @Nullable FetchRewrite rewriteToFetch(Collection<Symbol> usedColumns) {
+        FetchRewrite fetchRewrite = source.rewriteToFetch(usedColumns);
+        if (fetchRewrite == null) {
+            return null;
+        }
+        return new FetchRewrite(
+            fetchRewrite.replacedOutputs(),
+            new RootRelationBoundary(fetchRewrite.newPlan())
+        );
     }
 
     @Override

@@ -1835,4 +1835,41 @@ public class JoinIntegrationTest extends IntegTestCase {
         execute(query);
         assertThat(response.rows()).isEmpty();
     }
+
+    @UseRandomizedOptimizerRules(0)
+    @UseHashJoins(1)
+    @Test
+    public void debug() throws Exception {
+        execute("create table doc.t1 (id int, col1 int) with(number_of_replicas=0)");
+        execute("insert into doc.t1 (id, col1) select b, b from generate_series(1,10000) a(b)");
+        execute("create table doc.t2 (id int, a int)");
+        execute("insert into doc.t2 (id, a) select b, b from generate_series(1,100) a(b)");
+        execute("refresh table doc.t1");
+        execute("refresh table doc.t2");
+        execute("analyze");
+        waitNoPendingTasksOnAll();
+        try (var session = sqlExecutor.newSession()) {
+            execute("SET optimizer_equi_join_to_lookup_join = true", session);
+            // with optimizer_equi_join_to_lookup_join = false fetch works (no MultiPhase)
+//            "Fetch[id, col1, id]",
+//                "  └ Limit[5::bigint;0]",
+//                "    └ HashJoin[INNER | (id = id)]",
+//                "      ├ Collect[doc.t1 | [_fetchid, id] | true]",
+//                "      └ Collect[doc.t2 | [id] | (a > 10)]"
+            var query = "select t1.id, t1.col1, t2.id from doc.t1 join doc.t2 on t1.id = t2.id where t2.a > 10 limit 5";
+            execute("explain (costs false)" + query, session);
+            assertThat(response).hasLines(
+                "Limit[5::bigint;0]",
+                "  └ HashJoin[INNER | (id = id)]",
+                "    ├ MultiPhase",
+                "    │  └ Collect[doc.t1 | [id, col1] | (id = ANY((doc.t2)))]",
+                "    │  └ Eval[id]",
+                "    │    └ Filter[(a > 10)]",
+                "    │      └ Collect[doc.t2 | [id, a] | true]",
+                "    └ Collect[doc.t2 | [id] | (a > 10)]"
+            );
+            execute(query, session);
+            assertThat(response).hasRowCount(5);
+        }
+    }
 }
