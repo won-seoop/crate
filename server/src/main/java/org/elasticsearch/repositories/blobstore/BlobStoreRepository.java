@@ -991,6 +991,9 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
             Map.Entry<String, BlobContainer> finalIndexEntry = indexEntry;
             threadPool.executor(ThreadPool.Names.SNAPSHOT).execute(() -> {
                 try {
+                    if (3 < 5) {
+                        throw new IOException("dummy");
+                    }
                     finalIndexEntry.getValue().delete();
                     if (LOGGER.isDebugEnabled()) {
                         LOGGER.debug("[{}] Cleaned up stale index [{}]", metadata.name(), indexSnId);

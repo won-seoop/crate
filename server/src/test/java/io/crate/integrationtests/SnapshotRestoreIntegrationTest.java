@@ -1469,4 +1469,31 @@ public class SnapshotRestoreIntegrationTest extends IntegTestCase {
             .isExactlyInstanceOf(PartitionAlreadyExistsException.class)
             .hasMessage("Partition '" + sqlExecutor.getCurrentSchema() + "..partitioned.parted_table.04130' already exists");
     }
+
+    @Test
+    public void debug() throws Exception {
+        // Processors number is set as builder.put(EsExecutors.PROCESSORS_SETTING.getKey(), 1 + random.nextInt(3)).
+        // To make reproduction stable, using max + 1 = halfProcMaxAt5 + 1,
+        // so that test fails regardless of processors count.
+        for (int i = 0; i < 6; i++) {
+            StringBuilder sb = new StringBuilder("CREATE TABLE t")
+                .append(i)
+                .append(" AS SELECT a, random() b FROM generate_series(1, 10, 1) as t(a)");
+            execute(sb.toString());
+        }
+        execute("CREATE SNAPSHOT my_repo.test_snapshot ALL WITH (wait_for_completion=true)");
+        for (int i = 0; i < 6; i++) {
+            execute("DROP TABLE t" + i);
+        }
+
+        execute("DROP SNAPSHOT " + REPOSITORY_NAME + ".test_snapshot");
+
+
+        assertThat(response.rowCount()).isEqualTo(1L);
+
+        execute("select * from sys.snapshots where name = 'test_snapshot'");
+        assertThat(response.rowCount()).isEqualTo(0L);
+        assertAllRepoSnapshotFilesAreDeleted(defaultRepositoryLocation);
+
+    }
 }
