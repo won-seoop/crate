@@ -24,6 +24,7 @@ package io.crate.protocols.postgres.types;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.MathContext;
 import java.util.List;
 
@@ -46,7 +47,8 @@ public class NumericTypeTest extends BasePGTypeTest<BigDecimal> {
         new BigDecimal("00123"),
         new BigDecimal("12.123").setScale(2, MathContext.DECIMAL64.getRoundingMode()),
         new BigDecimal("1234.0"),
-        new BigDecimal("1234.0000").setScale(1, MathContext.DECIMAL64.getRoundingMode())
+        new BigDecimal("1234.0000").setScale(1, MathContext.DECIMAL64.getRoundingMode()),
+        new BigDecimal(new BigInteger("3411016753891"), 162)
     );
 
     @Test
